@@ -25,6 +25,7 @@ type RoundServiceType = {
 	_characterTroves: { [Player]: TroveType },
 	_currentRound: number,
 	_state: RoundState,
+	_isResetting: boolean,
 	_transitionPromise: TransitionPromise?,
 	_nextRoundId: number,
 	_activeRoundId: number?,
@@ -42,6 +43,7 @@ local RoundService = {
 	_characterTroves = {},
 	_currentRound = 0,
 	_state = "WaitingForPlayers",
+	_isResetting = false,
 	_transitionPromise = nil,
 	_nextRoundId = 0,
 	_activeRoundId = nil,
@@ -98,6 +100,11 @@ local function cancelTransition(self: RoundServiceType)
 end
 
 local function resetRun(self: RoundServiceType): ()
+	if self._isResetting or self._state == "WaitingForPlayers" then
+		return
+	end
+
+	self._isResetting = true
 	cancelTransition(self)
 	self._activeRoundId = nil
 	self._currentRound = 0
@@ -107,6 +114,22 @@ local function resetRun(self: RoundServiceType): ()
 	ZombieService:clearZombies()
 	ScoreService:publishFinalScores()
 	ScoreService:resetScores()
+	task.defer(function()
+		self._isResetting = false
+	end)
+end
+
+local function killLivingPlayers(): boolean
+	local killedAny = false
+	for _, player in Players:GetPlayers() do
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if humanoid and humanoid.Health > 0 then
+			humanoid.Health = 0
+			killedAny = true
+		end
+	end
+	return killedAny
 end
 
 local function startRound(self: RoundServiceType): ()
@@ -126,7 +149,9 @@ local function startRound(self: RoundServiceType): ()
 	local zombieCount = RoundUtil.getZombieCount(self._currentRound)
 	setTimer(self, RoundUtil.getDuration(zombieCount), function()
 		if self._state == "RoundActive" and self._activeRoundId == roundId then
-			resetRun(self)
+			if not killLivingPlayers() then
+				resetRun(self)
+			end
 		end
 	end)
 	ZombieService:startRound(roundId, self._currentRound, zombieCount)
