@@ -2,16 +2,21 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local Round = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Round"))
+local RoundData = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Round"))
 
 type RoundUtilType = {
 	getZombieCount: (roundNumber: number) -> number,
+	getDuration: (zombieCount: number) -> number,
 }
 
 local RoundUtil = {} :: RoundUtilType
 
 function RoundUtil.getZombieCount(roundNumber: number): number
-	return Round.baseZombieCount + (roundNumber - 1) * Round.zombieGrowthPerRound
+	return RoundData.baseZombieCount + (roundNumber - 1) * RoundData.zombieGrowthPerRound
+end
+
+function RoundUtil.getDuration(zombieCount: number): number
+	return RoundData.baseRoundSeconds + zombieCount * RoundData.secondsPerZombie
 end
 
 return RoundUtil

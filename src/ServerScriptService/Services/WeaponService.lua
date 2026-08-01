@@ -7,8 +7,11 @@ local Comm = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Co
 local Trove = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Trove"))
 
 local Format = require(ReplicatedStorage:WaitForChild("Utils"):WaitForChild("Format"))
-local Net = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Net"))
-local Weapon = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Weapon"))
+local NetData = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Net"))
+local WeaponData = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Weapon"))
+
+local RoundService = require(script.Parent:WaitForChild("RoundService"))
+local ZombieService = require(script.Parent:WaitForChild("ZombieService"))
 
 local assets = ReplicatedStorage:WaitForChild("Assets")
 local weapons = assets:WaitForChild("Weapons")
@@ -16,29 +19,34 @@ local weapons = assets:WaitForChild("Weapons")
 local CAMERA_ORIGIN_TOLERANCE = 16
 local MAXIMUM_AIM_DIRECTION_MAGNITUDE = 1000
 local MINIMUM_REQUEST_INTERVAL = 1 / 30
+local TRACE_DISTANCE = 1000
 
 type WeaponRuntime = {
 	character: Model,
 	tool: Tool,
+	ammo: number,
+	nextShotAt: number,
 	nextRequestAt: number,
 }
 
 type TroveType = typeof(Trove.new())
 type WeaponServiceType = {
-	ServiceTrove: TroveType,
-	PlayerRuntimes: { [Player]: WeaponRuntime? },
-	PlayerTroves: { [Player]: TroveType },
-	WeaponComm: any,
-	AttackRequestSignal: any,
+	_serviceTrove: TroveType,
+	_playerRuntimes: { [Player]: WeaponRuntime? },
+	_playerTroves: { [Player]: TroveType },
+	_weaponComm: any,
+	_attackRequestSignal: any,
+	_weaponStateProperty: any,
 	onStart: (self: WeaponServiceType) -> (),
 }
 
 local WeaponService = {
-	ServiceTrove = Trove.new(),
-	PlayerRuntimes = {},
-	PlayerTroves = {},
-	WeaponComm = nil :: any,
-	AttackRequestSignal = nil :: any,
+	_serviceTrove = Trove.new(),
+	_playerRuntimes = {},
+	_playerTroves = {},
+	_weaponComm = nil :: any,
+	_attackRequestSignal = nil :: any,
+	_weaponStateProperty = nil :: any,
 } :: WeaponServiceType
 
 local function getBackpack(player: Player): Backpack?
@@ -61,7 +69,7 @@ local function isCurrentPlayerLife(
 	playerTrove: TroveType,
 	character: Model
 ): boolean
-	return self.PlayerTroves[player] == playerTrove and player.Character == character
+	return self._playerTroves[player] == playerTrove and player.Character == character
 end
 
 local function grantWeapon(self: WeaponServiceType, player: Player, playerTrove: TroveType, character: Model)
@@ -69,7 +77,7 @@ local function grantWeapon(self: WeaponServiceType, player: Player, playerTrove:
 		return
 	end
 
-	self.PlayerRuntimes[player] = nil
+	self._playerRuntimes[player] = nil
 
 	local backpack = getBackpack(player)
 	if not backpack then
@@ -81,9 +89,9 @@ local function grantWeapon(self: WeaponServiceType, player: Player, playerTrove:
 		return
 	end
 
-	local tool = weapons:FindFirstChild(Weapon.weaponName)
+	local tool = weapons:FindFirstChild(WeaponData.weaponName)
 	if not tool or not tool:IsA("Tool") then
-		warn("Could not find a Tool named " .. Weapon.weaponName)
+		warn("Could not find a Tool named " .. WeaponData.weaponName)
 		return
 	end
 
@@ -94,11 +102,23 @@ local function grantWeapon(self: WeaponServiceType, player: Player, playerTrove:
 	end
 
 	toolClone.Parent = backpack
-	self.PlayerRuntimes[player] = {
+	self._playerRuntimes[player] = {
+		ammo = WeaponData.capacity,
 		character = character,
+		nextShotAt = 0,
 		tool = toolClone,
 		nextRequestAt = 0,
 	}
+end
+
+local function publishWeaponState(self: WeaponServiceType, player: Player)
+	local runtime = self._playerRuntimes[player]
+	if self._weaponStateProperty and runtime then
+		self._weaponStateProperty:SetFor(player, {
+			ammo = runtime.ammo,
+			capacity = WeaponData.capacity,
+		})
+	end
 end
 
 local function getRootPart(character: Model): BasePart?
@@ -111,7 +131,7 @@ local function getRootPart(character: Model): BasePart?
 end
 
 local function canPerformAttack(self: WeaponServiceType, player: Player, attackRequest: any): boolean
-	local runtime = self.PlayerRuntimes[player]
+	local runtime = self._playerRuntimes[player]
 	if not runtime or type(attackRequest) ~= "table" then
 		return false
 	end
@@ -150,6 +170,9 @@ local function canPerformAttack(self: WeaponServiceType, player: Player, attackR
 	if player.Character ~= runtime.character or tool ~= runtime.tool or tool.Parent ~= runtime.character then
 		return false
 	end
+	if not RoundService:isRoundActive() or runtime.ammo <= 0 or now < runtime.nextShotAt then
+		return false
+	end
 
 	local humanoid = runtime.character:FindFirstChildOfClass("Humanoid")
 	if not humanoid or humanoid.Health <= 0 then
@@ -170,17 +193,31 @@ local function performAttack(self: WeaponServiceType, player: Player, attackRequ
 		return
 	end
 
-	print("Can perform attack")
-	-- TODO:Ammo, cooldown, raycast
-end
-
-local function setupPlayer(self: WeaponServiceType, player: Player)
-	if self.PlayerTroves[player] then
+	local runtime = self._playerRuntimes[player]
+	if not runtime then
 		return
 	end
 
-	local playerTrove = self.ServiceTrove:Extend()
-	self.PlayerTroves[player] = playerTrove
+	local direction = attackRequest.aimDirection.Unit * TRACE_DISTANCE
+	local raycastParams = RaycastParams.new()
+	raycastParams.ExcludeInstances = { runtime.character, runtime.tool }
+	local result = workspace:Raycast(attackRequest.cameraOrigin, direction, raycastParams)
+
+	runtime.ammo -= 1
+	runtime.nextShotAt = os.clock() + WeaponData.cooldown
+	publishWeaponState(self, player)
+	if result then
+		--TODO: Damage Zombie with weapon by the player
+	end
+end
+
+local function setupPlayer(self: WeaponServiceType, player: Player)
+	if self._playerTroves[player] then
+		return
+	end
+
+	local playerTrove = self._serviceTrove:Extend()
+	self._playerTroves[player] = playerTrove
 	playerTrove:Connect(player.CharacterAdded, function(character)
 		grantWeapon(self, player, playerTrove, character)
 	end)
@@ -188,31 +225,39 @@ local function setupPlayer(self: WeaponServiceType, player: Player)
 	if player.Character then
 		grantWeapon(self, player, playerTrove, player.Character)
 	end
+	publishWeaponState(self, player)
 end
 
 local function removePlayer(self: WeaponServiceType, player: Player)
-	self.PlayerRuntimes[player] = nil
+	self._playerRuntimes[player] = nil
+	if self._weaponStateProperty then
+		self._weaponStateProperty:ClearFor(player)
+	end
 
-	local playerTrove = self.PlayerTroves[player]
+	local playerTrove = self._playerTroves[player]
 	if not playerTrove then
 		return
 	end
 
-	self.PlayerTroves[player] = nil
-	self.ServiceTrove:Remove(playerTrove :: any)
+	self._playerTroves[player] = nil
+	self._serviceTrove:Remove(playerTrove :: any)
 end
 
 function WeaponService.onStart(self: WeaponServiceType): ()
-	self.WeaponComm = Comm.ServerComm.new(ReplicatedStorage, Net.weapon.namespace)
-	self.AttackRequestSignal = self.WeaponComm:CreateSignal(Net.weapon.attackRequest)
-	self.ServiceTrove:Add(self.AttackRequestSignal:Connect(function(player: Player, attackRequest: any)
+	self._weaponComm = Comm.ServerComm.new(ReplicatedStorage, NetData.weapon.namespace)
+	self._attackRequestSignal = self._weaponComm:CreateSignal(NetData.weapon.attackRequest)
+	self._weaponStateProperty = self._weaponComm:CreateProperty("WeaponState", {
+		ammo = 0,
+		capacity = WeaponData.capacity,
+	})
+	self._serviceTrove:Add(self._attackRequestSignal:Connect(function(player: Player, attackRequest: any)
 		performAttack(self, player, attackRequest)
 	end))
 
-	self.ServiceTrove:Connect(Players.PlayerAdded, function(player)
+	self._serviceTrove:Connect(Players.PlayerAdded, function(player)
 		setupPlayer(self, player)
 	end)
-	self.ServiceTrove:Connect(Players.PlayerRemoving, function(player)
+	self._serviceTrove:Connect(Players.PlayerRemoving, function(player)
 		removePlayer(self, player)
 	end)
 

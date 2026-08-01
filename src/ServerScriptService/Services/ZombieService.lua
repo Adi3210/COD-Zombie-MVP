@@ -7,18 +7,26 @@ local Signal = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("
 
 local ZombieData = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Zombie"))
 
+local ScoreService = require(script.Parent:WaitForChild("ScoreService"))
+
 local assets = ReplicatedStorage:WaitForChild("Assets")
 local zombies = assets:WaitForChild("Zombies")
 local zombieSpawns = Workspace:WaitForChild("Spawns", 10)
 
 local ZOMBIE_FOLDER_NAME = "TempZombies"
 
+type ZombieState = {
+	humanoid: Humanoid,
+	lastDamagingPlayer: Player?,
+	roundId: number,
+}
 type ZombieServiceType = {
-	_zombies: { [Model]: number },
+	_zombies: { [Model]: ZombieState },
 	_activeRoundId: number?,
 	_nextSpawnIndex: number,
 	_zombieFolder: Folder?,
 	clearZombies: (self: ZombieServiceType) -> (),
+	damageZombie: (self: ZombieServiceType, player: Player, instance: Instance, damage: number) -> boolean,
 	onStart: (self: ZombieServiceType) -> (),
 	startRound: (self: ZombieServiceType, roundId: number, roundNumber: number, zombieCount: number) -> (),
 	zombiesCleared: any,
@@ -33,12 +41,6 @@ local ZombieService = {
 } :: ZombieServiceType
 
 local function initializeZombieFolder(self: ZombieServiceType)
-	local existingFolder = Workspace:WaitForChild(ZOMBIE_FOLDER_NAME, 10)
-	if existingFolder and existingFolder:IsA("Folder") then
-		self._zombieFolder = existingFolder
-		return
-	end
-
 	local createdFolder = Instance.new("Folder")
 	createdFolder.Name = ZOMBIE_FOLDER_NAME
 	createdFolder.Parent = Workspace
@@ -66,7 +68,8 @@ local function createZombie(roundNumber: number, spawnPart: BasePart): (Model, H
 end
 
 local function removeZombie(self: ZombieServiceType, zombie: Model, roundId: number)
-	if self._zombies[zombie] ~= roundId then
+	local runtime = self._zombies[zombie]
+	if not runtime or runtime.roundId ~= roundId then
 		return
 	end
 
@@ -79,6 +82,35 @@ local function removeZombie(self: ZombieServiceType, zombie: Model, roundId: num
 		self._activeRoundId = nil
 		self.zombiesCleared:Fire(roundId)
 	end
+end
+
+local function findTrackedZombie(self: ZombieServiceType, instance: Instance): ZombieState?
+	local zombie = instance:FindFirstAncestorOfClass("Model")
+	if not zombie then
+		return nil
+	end
+
+	return self._zombies[zombie]
+end
+
+function ZombieService.damageZombie(
+	self: ZombieServiceType,
+	player: Player,
+	instance: Instance,
+	damage: number
+): boolean
+	if damage <= 0 then
+		return false
+	end
+
+	local runtime = findTrackedZombie(self, instance)
+	if not runtime or runtime.humanoid.Health <= 0 then
+		return false
+	end
+
+	runtime.lastDamagingPlayer = player
+	runtime.humanoid:TakeDamage(damage)
+	return true
 end
 
 function ZombieService.clearZombies(self: ZombieServiceType): ()
@@ -127,6 +159,11 @@ function ZombieService.startRound(
 	table.sort(spawnParts, function(left, right)
 		return left.Name < right.Name
 	end)
+	if #spawnParts == 0 then
+		warn("No zombie spawn parts found")
+		self._activeRoundId = nil
+		return
+	end
 
 	for _ = 1, zombieCount do
 		if self._activeRoundId ~= roundId then
@@ -139,8 +176,16 @@ function ZombieService.startRound(
 		local zombie, humanoid = createZombie(roundNumber, spawnPart)
 		zombie.Parent = zombieFolder
 
-		self._zombies[zombie] = roundId
+		self._zombies[zombie] = {
+			humanoid = humanoid,
+			lastDamagingPlayer = nil,
+			roundId = roundId,
+		}
 		humanoid.Died:Connect(function()
+			local runtime = self._zombies[zombie]
+			if runtime and runtime.lastDamagingPlayer then
+				ScoreService:addZombieKill(runtime.lastDamagingPlayer)
+			end
 			removeZombie(self, zombie, roundId)
 		end)
 	end
