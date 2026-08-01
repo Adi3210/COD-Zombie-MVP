@@ -130,6 +130,16 @@ local function getRootPart(character: Model): BasePart?
 	return nil
 end
 
+local function getRayOrigin(character: Model): Vector3?
+	local head = character:FindFirstChild("Head")
+	if head and head:IsA("BasePart") then
+		return head.Position
+	end
+
+	local rootPart = getRootPart(character)
+	return rootPart and rootPart.Position or nil
+end
+
 local function canPerformAttack(self: WeaponServiceType, player: Player, attackRequest: any): boolean
 	local runtime = self._playerRuntimes[player]
 	if not runtime or type(attackRequest) ~= "table" then
@@ -185,7 +195,10 @@ local function canPerformAttack(self: WeaponServiceType, player: Player, attackR
 	end
 
 	local originDistance = (cameraOrigin - rootPart.Position).Magnitude
-	return Format.isFiniteNumber(originDistance) and originDistance <= CAMERA_ORIGIN_TOLERANCE
+	if not Format.isFiniteNumber(originDistance) or originDistance > CAMERA_ORIGIN_TOLERANCE then
+		return false
+	end
+	return true
 end
 
 local function performAttack(self: WeaponServiceType, player: Player, attackRequest: any)
@@ -198,16 +211,22 @@ local function performAttack(self: WeaponServiceType, player: Player, attackRequ
 		return
 	end
 
+	local rayOrigin = getRayOrigin(runtime.character)
+	if not rayOrigin then
+		return
+	end
+
 	local direction = attackRequest.aimDirection.Unit * TRACE_DISTANCE
 	local raycastParams = RaycastParams.new()
-	raycastParams.ExcludeInstances = { runtime.character, runtime.tool }
-	local result = workspace:Raycast(attackRequest.cameraOrigin, direction, raycastParams)
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParams.FilterDescendantsInstances = { runtime.character, runtime.tool }
+	local result = workspace:Raycast(rayOrigin, direction, raycastParams)
 
 	runtime.ammo -= 1
 	runtime.nextShotAt = os.clock() + WeaponData.cooldown
 	publishWeaponState(self, player)
 	if result then
-		--TODO: Damage Zombie with weapon by the player
+		ZombieService:damageZombie(player, result.Instance, WeaponData.damage)
 	end
 end
 
