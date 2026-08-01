@@ -7,42 +7,42 @@ local Workspace = game:GetService("Workspace")
 local Comm = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Comm"))
 local Trove = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Trove"))
 
-local Net = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Net"))
-local Weapon = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Weapon"))
+local NetData = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Net"))
+local WeaponData = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Weapon"))
 
 type TroveType = typeof(Trove.new())
 type WeaponControllerType = {
-	ServiceTrove: TroveType,
-	BackpackTrove: TroveType,
-	CharacterTrove: TroveType,
-	ToolTroves: { [Tool]: TroveType },
-	ClientComm: any,
-	AttackRequestSignal: any,
+	_serviceTrove: TroveType,
+	_backpackTrove: TroveType,
+	_characterTrove: TroveType,
+	_toolTroves: { [Tool]: TroveType },
+	_weaponComm: any,
+	_attackRequestSignal: any,
 	onStart: (self: WeaponControllerType) -> (),
 }
 
 local player = Players.LocalPlayer
 
 local WeaponController = {
-	ServiceTrove = Trove.new(),
-	BackpackTrove = nil :: any,
-	CharacterTrove = nil :: any,
-	ToolTroves = {},
-	ClientComm = nil :: any,
-	AttackRequestSignal = nil :: any,
+	_serviceTrove = Trove.new(),
+	_backpackTrove = nil :: any,
+	_characterTrove = nil :: any,
+	_toolTroves = {},
+	_weaponComm = nil :: any,
+	_attackRequestSignal = nil :: any,
 } :: WeaponControllerType
 
-WeaponController.BackpackTrove = WeaponController.ServiceTrove:Extend()
-WeaponController.CharacterTrove = WeaponController.ServiceTrove:Extend()
+WeaponController._backpackTrove = WeaponController._serviceTrove:Extend()
+WeaponController._characterTrove = WeaponController._serviceTrove:Extend()
 
 local function stopObservingTool(self: WeaponControllerType, tool: Tool)
-	local toolTrove = self.ToolTroves[tool]
+	local toolTrove = self._toolTroves[tool]
 	if not toolTrove then
 		return
 	end
 
-	self.ToolTroves[tool] = nil
-	self.ServiceTrove:Remove(toolTrove :: any)
+	self._toolTroves[tool] = nil
+	self._serviceTrove:Remove(toolTrove :: any)
 end
 
 local function sendAttackRequest(self: WeaponControllerType, tool: Tool)
@@ -56,16 +56,16 @@ local function sendAttackRequest(self: WeaponControllerType, tool: Tool)
 		cameraOrigin = camera.CFrame.Position,
 		aimDirection = camera.CFrame.LookVector,
 	}
-	self.AttackRequestSignal:Fire(attackRequest)
+	self._attackRequestSignal:Fire(attackRequest)
 end
 
 local function observeTool(self: WeaponControllerType, tool: Tool)
-	if tool.Name ~= Weapon.weaponName or self.ToolTroves[tool] then
+	if tool.Name ~= WeaponData.weaponName or self._toolTroves[tool] then
 		return
 	end
 
-	local toolTrove = self.ServiceTrove:Extend()
-	self.ToolTroves[tool] = toolTrove
+	local toolTrove = self._serviceTrove:Extend()
+	self._toolTroves[tool] = toolTrove
 	toolTrove:Connect(tool.Activated, function()
 		sendAttackRequest(self, tool)
 	end)
@@ -95,48 +95,55 @@ local function observeTools(self: WeaponControllerType, container: Instance, con
 end
 
 local function observeBackpack(self: WeaponControllerType, backpack: Backpack)
-	self.BackpackTrove:Clean()
+	self._backpackTrove:Clean()
 	if not backpack:IsDescendantOf(game) then
 		return
 	end
 
-	self.BackpackTrove:Connect(backpack.AncestryChanged, function()
+	self._backpackTrove:Connect(backpack.AncestryChanged, function()
 		if not backpack:IsDescendantOf(game) then
-			self.BackpackTrove:Clean()
+			self._backpackTrove:Clean()
 		end
 	end)
-	observeTools(self, backpack, self.BackpackTrove)
+	observeTools(self, backpack, self._backpackTrove)
 end
 
 local function observeCharacter(self: WeaponControllerType, character: Model)
-	self.CharacterTrove:Clean()
+	self._characterTrove:Clean()
 	if not character:IsDescendantOf(game) then
 		return
 	end
 
-	self.CharacterTrove:Connect(character.AncestryChanged, function()
+	self._characterTrove:Connect(character.AncestryChanged, function()
 		if not character:IsDescendantOf(game) then
-			self.CharacterTrove:Clean()
+			self._characterTrove:Clean()
 		end
 	end)
-	observeTools(self, character, self.CharacterTrove)
+	observeTools(self, character, self._characterTrove)
 end
 
-function WeaponController.onStart(self: WeaponControllerType): ()
-	self.ClientComm = Comm.ClientComm.new(ReplicatedStorage, false, Net.weapon.namespace)
-	self.AttackRequestSignal = self.ClientComm:GetSignal(Net.weapon.attackRequest)
+local function connectSignals(self: WeaponControllerType)
+	self._weaponComm = Comm.ClientComm.new(ReplicatedStorage, false, NetData.weapon.namespace)
+	self._attackRequestSignal = self._weaponComm:GetSignal(NetData.weapon.attackRequest)
+end
 
-	self.ServiceTrove:Connect(player.ChildAdded, function(child)
+local function connectEvents(self: WeaponControllerType)
+	self._serviceTrove:Connect(player.ChildAdded, function(child)
 		if child:IsA("Backpack") then
 			observeBackpack(self, child)
 		end
 	end)
-	self.ServiceTrove:Connect(player.CharacterAdded, function(character)
+	self._serviceTrove:Connect(player.CharacterAdded, function(character)
 		observeCharacter(self, character)
 	end)
-	self.ServiceTrove:Connect(player.CharacterRemoving, function()
-		self.CharacterTrove:Clean()
+	self._serviceTrove:Connect(player.CharacterRemoving, function()
+		self._characterTrove:Clean()
 	end)
+end
+
+function WeaponController.onStart(self: WeaponControllerType): ()
+	connectSignals(self)
+	connectEvents(self)
 
 	local backpack = player:FindFirstChildOfClass("Backpack")
 	if backpack then
