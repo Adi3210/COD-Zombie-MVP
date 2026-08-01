@@ -19,4 +19,8 @@ function Format.formatSeconds(seconds: number): string
 	return string.format("%02d:%02d", minutes, seconds)
 end
 
+function Format.formatCount(value: number): string
+	return tostring(math.max(0, math.floor(value)))
+end
+
 return Format

@@ -5,6 +5,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Promise = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Promise"))
 local Comm = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Comm"))
+local Signal = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Signal"))
 local Trove = require(ReplicatedStorage:WaitForChild("Packages"):WaitForChild("Trove"))
 
 local RoundData = require(ReplicatedStorage:WaitForChild("Data"):WaitForChild("Round"))
@@ -34,6 +35,9 @@ type RoundServiceType = {
 	_timerId: number,
 	_roundComm: any,
 	isRoundActive: (self: RoundServiceType) -> boolean,
+	isWeaponEnabled: (self: RoundServiceType) -> boolean,
+	weaponAvailabilityChanged: any,
+	_lastWeaponEnabled: boolean,
 	onStart: (self: RoundServiceType) -> (),
 }
 
@@ -51,7 +55,13 @@ local RoundService = {
 	_secondsLeft = 0,
 	_timerId = 0,
 	_roundComm = nil :: any,
+	weaponAvailabilityChanged = Signal.new(),
+	_lastWeaponEnabled = false,
 } :: RoundServiceType
+
+local function isWeaponState(state: RoundState): boolean
+	return state == "RoundActive" or state == "RoundClearDelay"
+end
 
 local function publishState(self: RoundServiceType)
 	if self._roundProperty then
@@ -60,6 +70,11 @@ local function publishState(self: RoundServiceType)
 			secondsLeft = self._secondsLeft,
 			state = self._state,
 		})
+	end
+	local weaponEnabled = isWeaponState(self._state)
+	if weaponEnabled ~= self._lastWeaponEnabled then
+		self._lastWeaponEnabled = weaponEnabled
+		self.weaponAvailabilityChanged:Fire(weaponEnabled)
 	end
 end
 
@@ -283,6 +298,10 @@ end
 
 function RoundService.isRoundActive(self: RoundServiceType): boolean
 	return self._state == "RoundActive"
+end
+
+function RoundService.isWeaponEnabled(self: RoundServiceType): boolean
+	return isWeaponState(self._state)
 end
 
 return RoundService

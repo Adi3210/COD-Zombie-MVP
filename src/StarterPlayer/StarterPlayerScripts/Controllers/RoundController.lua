@@ -55,9 +55,13 @@ local function renderRound(self: RoundControllerType, state: any)
 	end
 
 	if state.state == "WaitingForPlayers" then
-		self.roundLabel.Text = "Waiting for Players"
+		self.roundLabel.Text = "Not enough players"
 	elseif state.state == "RoundStartCountdown" then
-		self.roundLabel.Text = "Round 1 starting soon"
+		self.roundLabel.Text = "Round 1 starts in..."
+	elseif state.state == "RoundClearDelay" then
+		local roundNumber = state.round
+		local displayRound = type(roundNumber) == "number" and roundNumber > 0 and roundNumber or 1
+		self.roundLabel.Text = "Round " .. displayRound .. " cleared, next round in..."
 	else
 		local roundNumber = state.round
 		local displayRound = type(roundNumber) == "number" and roundNumber > 0 and roundNumber or 1
@@ -83,7 +87,7 @@ end
 
 local function connectUiReferences(self: RoundControllerType)
 	local playerGui = player:WaitForChild("PlayerGui")
-	self.hud = playerGui:WaitForChild("RoundHUD")
+	self.hud = playerGui:WaitForChild("RoundHUD", 10)
 	self.frame = self.hud.Frame
 	self.roundLabel = self.frame.RoundLabel
 	self.timer = self.frame.Timer
